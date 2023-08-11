@@ -1,0 +1,117 @@
+name: Generate static binaries
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - '*'
+  pull_request:
+    branches:
+      - '**'
+  schedule:
+    # test master every Saturday at 08:00 UTC
+    - cron: '0 8 * * 6'
+jobs:
+  learn-ocaml-www-zip:
+    name: Build learn-ocaml-www.zip archive
+    if: ${{ github.event_name != 'schedule' || github.repository == 'ocaml-sf/learn-ocaml' }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch_dir: ["learn-ocaml-www"]
+        # we could use an env var, albeit it would be less convenient
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v3
+      - name: Build learn-ocaml-compilation
+        run: 'docker build -t learn-ocaml-compilation --target=compilation .'
+      - name: 'Build ${{ matrix.arch_dir }}.zip'
+        run: |
+          docker run -i --rm -w /home/opam/install-prefix/share/learn-ocaml -u 0 --entrypoint='' learn-ocaml-compilation sh -c \
+          'mv www "${{ matrix.arch_dir }}" >&2 && apk add --no-cache zip >&2 && zip -r "${{ matrix.arch_dir }}.zip" "${{ matrix.arch_dir }}" >&2 && tar c "${{ matrix.arch_dir }}.zip"' | \
+          tar vx
+      - name: 'Upload ${{ matrix.arch_dir }}.zip'
+        uses: actions/upload-artifact@v2
+        with:
+          name: '${{ matrix.arch_dir }}.zip'
+          path: '${{ matrix.arch_dir }}.zip'
+  static-bin-linux:
+    name: Builds static Linux binaries
+    if: ${{ github.event_name != 'schedule' || github.repository == 'ocaml-sf/learn-ocaml' }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        artifact: ["learn-ocaml-linux-x86_64.tar.gz"]
+        # we could use an env var, albeit it would be less convenient
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v3
+      - name: Build the binaries
+        run: |
+          ./scripts/static-build.sh
+      - name: Test the binaries
+        run: |
+          bin=(./learn-ocaml-client ./learn-ocaml-server ./learn-ocaml)
+          file "${bin[@]}"
+          for b in "${bin[@]}"; do ( set -x; "$b" --version ); done
+      - name: Archive static binaries
+        run: |
+          uname -a
+          tar cvzf ${{ matrix.artifact }} \
+            learn-ocaml learn-ocaml-server learn-ocaml-client
+      - name: Upload static binaries
+        uses: actions/upload-artifact@v2
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+  static-bin-macos:
+    name: Builds static Macos binaries
+    if: ${{ github.event_name != 'schedule' || github.repository == 'ocaml-sf/learn-ocaml' }}
+    runs-on: macos-latest
+    env:
+      OPAMYES: 1
+      OPAMDEPEXTYES: 1
+    strategy:
+      matrix:
+        artifact: ["learn-ocaml-darwin-x86_64.tar.gz"]
+        # we could use an env var, albeit it would be less convenient
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v3
+      - name: Show OS version
+        run: |
+          sw_vers
+          system_profiler SPSoftwareDataType
+          uname -a
+      - name: Retrieve opam
+        run: |
+          mkdir "$HOME/bin"
+          wget https://github.com/ocaml/opam/releases/download/2.1.0/opam-2.1.0-x86_64-macos -O $HOME/bin/opam
+          chmod a+x $HOME/bin/opam
+          echo "$HOME/bin" >> $GITHUB_PATH
+      - name: Prepare build environment
+        run: |
+          opam init -a --bare
+          brew install openssl@3  # Workaround https://github.com/ocaml/opam-repository/issues/19676
+          opam switch create . ocaml-base-compiler --deps-only
+      - name: Build the binaries
+        run: |
+          opam exec -- make LINKING_MODE=static
+      - name: Test the binaries
+        run: |
+          bin=(./learn-ocaml-client ./learn-ocaml-server ./learn-ocaml)
+          dir="_build/install/default/bin"
+          file "$dir"/*
+          otool -L "$dir"/*
+          for b in "${bin[@]}"; do ( set -x; "$dir/$b" --version ); done
+      - name: Archive static binaries
+        run: |
+          uname -a
+          cd _build/install/default/bin
+          tar cvzhf "$OLDPWD"/${{ matrix.artifact }} \
+            learn-ocaml learn-ocaml-server learn-ocaml-client
+      - name: Upload static binaries
+        uses: actions/upload-artifact@v2
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
